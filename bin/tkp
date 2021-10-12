@@ -1,0 +1,872 @@
+#!/usr/bin/env bash
+
+##########################################
+# SCRIPT: TKP V4                         #
+# AUTOR: XGADYOU                         #
+# DESCRIPTION: SSH VIA TKP               #
+##########################################
+
+VERSION=4.4.1
+
+preCheck(){
+    tools=""
+    install_tools="N"
+    jq --version >/dev/null 2>&1 || { install_tools=Y; tools+="jq "; }
+    curl --version >/dev/null 2>&1 || { install_tools=Y; tools+="curl "; }
+    [ "$install_tools" = "Y" ] && { 
+        echo "You have to intsall $tools"
+        echo "Try: apt-get install $tools"
+        exit 0
+    }
+}
+
+# ensure cursor and input echoing back
+trap "cleanAll" 2
+    
+##########################################################################
+# little helpers for terminal print control and key input
+ESC=$( printf "\033")
+cleanAll()          {
+                        cursor_to $(($BOTTOM_PANEL_Y+1)) 0; 
+                        showCursor; 
+                        stty echo; 
+                        printf '\n'; 
+                        exit
+                    }
+showCursor()        { printf "$ESC[?25h"; }
+hideCursor()        { printf "$ESC[?25l"; }
+cursor_to()         { printf "$ESC[$1;${2:-1}H"; }
+print_option()      { 
+                        #echo ${1:0:38}
+                        # WAS    - ContentManager Websphere Servers  
+                         case $MENU_TYPE in 
+                            "_MENU_LEVEL_1_") 
+                                if [[ ${1:0:1} =~ $SYMBOLS_REGEX ]]
+                                then
+                                    printf "│  %-40s    " " ${1}"
+                                    #printf "  %-40s    │" " ${1}"
+                                else
+                                    if [ "${1}" = "$MENU_SPACER" ]
+                                    then 
+                                        printf "│  %-40s  │" "${1}"
+                                    else
+                                        printf "│  %-40s  │" " ${1:0:39}"
+                                    fi
+                                fi
+
+                                
+                                ;;
+                            *)
+                                if [[ ${1:0:1} =~ $SYMBOLS_REGEX ]]
+                                then
+                                    printf "  %-40s     " " ${1}"
+                                else
+                                    if [ "${1}" = "$MENU_SPACER" ]
+                                    then 
+                                        printf "  %-40s  │" "${1}"
+                                    else
+                                        printf "  %-40s  │" " ${1:0:39}"
+                                    fi
+                                fi
+                                ;;
+                        esac
+                        #printf "│   %-39s  │" "${1}"
+                    }
+print_selected()    { 
+                        #
+                        #"\e[3m\e[1mbold italic\e[0m"
+                        case $MENU_TYPE in 
+                            "_MENU_LEVEL_1_") 
+                                if [[ ${1:0:1} =~ $SYMBOLS_REGEX ]]
+                                then
+                                    printf "│\033[31m»\033[0m $ESC[7m%-42s$ESC[27m   " " $1"
+                                else
+                                    printf "│\033[31m»\033[0m $ESC[7m%-42s$ESC[27m│" " ${1:0:39}"
+                                fi
+                                
+                                ;;
+                            *)
+                                if [[ ${1:0:1} =~ $SYMBOLS_REGEX ]]
+                                then
+                                    printf "\033[31m»\033[0m $ESC[7m%-42s$ESC[27m     " " $1"
+                                else
+                                    printf "\033[31m»\033[0m $ESC[7m%-42s$ESC[27m│" " ${1:0:39}"
+                                fi
+                                ;;
+                        esac
+                    }
+get_cursor_row()    { IFS=';' read -sdR -p $'\E[6n' ROW COL; echo ${ROW#*[}; }
+key_input()         { read -s -n3 key 2>/dev/null >&2
+                     if [[ $key = $ESC[A ]]; then echo up;    fi
+                     if [[ $key = $ESC[B ]]; then echo down;  fi
+                     if [[ $key = $ESC[C ]]; then echo right;  fi
+                     if [[ $key = $ESC[D ]]; then echo left;  fi
+                     if [[ $key = $ESC[3 ]]; then echo delete;  fi
+                     if [[ $key = ""     ]]; then echo enter; fi 
+                     
+                     }
+
+function select_option {
+    local selected_index="${@: -1}"
+    set -- "${@:1:$(($#-1))}"
+    local MENU_TYPE="${@: -1}"
+    set -- "${@:1:$(($#-1))}"
+    argsarray=( "$@" )
+    case $MENU_TYPE in 
+        "_MENU_LEVEL_1_") 
+            local x=$LEVEL1_POSITION_X; 
+            local level=LEVEL1
+            ;;
+        "_MENU_LEVEL_2_") 
+            local x=$LEVEL2_POSITION_X; 
+            local level=LEVEL2
+            ;;
+        "_MENU_LEVEL_3_") 
+            local x=$LEVEL3_POSITION_X; 
+            local level=LEVEL3
+            ;;
+        "_MENU_LEVEL_4_") 
+            local x=$LEVEL4_POSITION_X; 
+            local level=LEVEL4
+            ;;
+    esac
+    
+    # initially print empty new lines (scroll down if at bottom of screen)
+    clearColumn $level
+    verticalRahmen $level
+    # determine current screen position for overwriting the options
+    local lastrow=`get_cursor_row`
+    #local startrow=$(($lastrow - $#))
+    local startrow=$COL_POSITION_Y
+    
+    local selected=$selected_index
+    while true; do
+        # print options by overwriting the last lines
+        local idx=0
+        
+        for opt; do
+            cursorstate=$(($startrow + $idx))
+            cursor_to $(($startrow + $idx)) $x
+            if [ $idx -eq $selected ]; then
+                print_selected "$opt"                    
+            else
+                print_option "$opt"
+            fi           
+            ((idx++))
+        done
+        case $(key_input) in
+            enter)  SELECTED=$selected; break;;
+            #right)  echo "RIGHT";;
+            #left)   [ $level = "LEVEL2" -o $level = "LEVEL3" ] && return 2222;;
+            #[ "$sub_index" -eq 174 ] && {
+            #        clearColumn LEVEL2
+            #        break
+            #    }
+            delete)
+                    SELECTED=$selected 
+                    if [[ ${argsarray[$selected]:0:1} =~ $SYMBOLS_REGEX ]];
+                    then 
+                        return $((200+$selected))
+                    fi 
+                    deleteItem $level $selected
+                    return $((100+$selected))
+                    ;;
+            up)     
+                    ((selected--));
+                    [ $selected -lt 0 ] && selected=$(($# - 1))
+                    if [ ${argsarray[$selected]} = "$MENU_SPACER" ]
+                    then
+                        [ $selected -eq 0 ] && selected=$(($# - 1)) || ((selected--)) 
+                    fi
+                    ;;
+            down)   
+                    ((selected++));
+                    [ $selected -ge $# ] && selected=0
+                    [ ${argsarray[$selected]} = "$MENU_SPACER" ] && ((selected++))
+                    ;;
+        esac
+    done
+    # cursor position back to normal
+    cursor_to $lastrow
+    printf "\n"
+    return $selected
+}
+
+usage(){
+    echo
+    echo " Usage:"
+    echo "   Start script without configfile"
+    echo "   $(basename $(readlink -f $0))"
+    echo "   Start script with an existing configfile"
+    echo "   $(basename $(readlink -f $0)) -c </path/to/config.json>"
+    echo
+    echo " Options:"
+    echo "   -c FILE    start with configfile "
+    echo "   -n FILE    create new sample configfile "
+    echo "   -h         show this message"
+    echo "   -v         version "    
+    exit 1
+}
+
+function selected_optindex {
+    select_option "$@" 1>&2
+    local result=$?
+    echo $result
+    return $result
+}
+
+function createNewConfig(){
+cat << '==JSON==' > $1
+{
+	"header1": "Application",
+	"header2": "Plex",
+	"header3": "Host", 
+	"user": "",
+	"menu": [{
+		"title": "APP    - Description",
+		"submenu": [{
+			"title": "ENV    - Description",
+			"hosts": [{
+				"name": "hostname",
+				"location": "ka",
+				"stage": "nonprod",
+				"domain": ""
+			}]
+		}]
+	}]
+}
+==JSON==
+}
+
+loadColumn(){
+    case $MENU_TYPE in 
+        "LEVEL1") local x=$LEVEL1_POSITION_X;;
+        "LEVEL2") local x=$LEVEL2_POSITION_X;;
+        "LEVEL3") local x=$LEVEL3_POSITION_X;;
+        "LEVEL4") local x=$LEVEL4_POSITION_X;;
+    esac
+    clearColumn $1
+    cursor_to $COL_POSITION_Y $x
+    echo -e " $(greenfg "Loading ...")"
+}
+goToBottemPanel(){
+    cursor_to $(($BOTTOM_PANEL_Y+2)) $BOTTOM_PANEL_X
+}
+myssh(){
+	[ "$2" = "prod" ] && audit=tkp-${3}.rz.bankenit.de || audit=tkp-nonprod-${3}.rz.bankenit.de
+    [ "$4" -a "$4" != "null" ] && SRV=${1}.${4} || SRV=${1}
+    
+    SUDOCMD=""
+    SUDOPRT=""
+    if [ "$5" = "null" ]
+    then
+        if [ "$USER" != "$ME" -a "$USER" != "" ];
+        then
+            # sudo global user 
+            SUDOCMD="'sudo -i -u ${USER}'"
+            SUDOPRT="$SUDOCMD"  
+        fi
+    else
+        if [ "$5" != "$ME" ]
+        then 
+            # sudo specific user
+            SUDOCMD="'sudo -i -u ${5}'"
+            SUDOPRT="$SUDOCMD"
+        fi
+    fi  
+    # clear bottom panel and show new info
+    clearOutput
+	goToBottemPanel
+	# start ssh session in new tab
+    echo -e "   $(greenfg ✔) Exec: ssh  -t -q ${ME}@${SRV}@${audit} $SUDOPRT" 
+    /bin/MobaSendMsg.exe MobaXterm -newtab "clear; xtitle ${1^^}; ssh  -t -q ${ME}@${SRV}@${audit} $SUDOCMD"
+    
+    echo
+}
+
+mysshOthers(){
+	[ $2 = "prod" ] && audit=tkp-${3}.rz.bankenit.de || audit=tkp-nonprod-${3}.rz.bankenit.de
+	[ $4 ] && SRV=${1}.${4} || SRV=${1}
+    # clear bottom panel and show new info
+    clearOutput
+	goToBottemPanel
+    # start ssh session in new tab
+	if [ "$USER" = "$ME" ]
+    then
+        echo "   $(greenfg ✔) Exec: ssh  -t -q ${ME}@${SRV}@${audit}"  
+        /bin/MobaSendMsg.exe MobaXterm -newtab "clear; xtitle ${1^^}; ssh  -t -q ${ME}@${SRV}@${audit}"
+	else
+        echo "   $(greenfg ✔) Exec: ssh  -t -q ${ME}@${SRV}@${audit} \"sudo -i -u ${USER}\"" 
+        /bin/MobaSendMsg.exe MobaXterm -newtab "clear; xtitle ${1^^}; ssh  -t -q ${ME}@${SRV}@${audit} "sudo -i -u ${USER}""
+    fi
+    echo
+}
+
+underline(){
+    echo -e "\e[4m$1\e[24m"
+}
+writeLine(){
+    local text="\033[1;37m$1\033[0m"
+	echo -e " │\e[44m $text│\e[0m"
+}
+greenfg(){
+	echo -ne "\e[32m$1\e[0m"
+}
+
+redfg(){
+	echo -ne "\e[31m$1\e[0m"
+}
+
+bluefg(){
+	echo -ne "\e[34m$1\e[0m"
+}
+
+bottomPanel(){
+    local bln="$(printf '─%.0s' {1..44})"
+    cursor_to $BOTTOM_PANEL_Y $BOTTOM_PANEL_X
+    echo " └$bln┴$bln┴$bln┘"
+}
+
+
+clearColumn(){
+    local startrow=$COL_POSITION_Y
+    case $1 in 
+        LEVEL1) x=$LEVEL1_POSITION_X;MENU_TYPE=_MENU_LEVEL_1_;;
+        LEVEL2) x=$LEVEL2_POSITION_X;MENU_TYPE=_MENU_LEVEL_2_;;
+        LEVEL3) x=$LEVEL3_POSITION_X;MENU_TYPE=_MENU_LEVEL_3_;;
+        LEVEL4) x=$LEVEL4_POSITION_X;MENU_TYPE=_MENU_LEVEL_4_;;
+    esac
+    for((i=1;i<=${COL_HEIGHT};i++))
+    do
+        cursor_to $startrow $x 
+        printf "$COL_BLANK_WIDTH \n";
+        startrow=$(($startrow+1))
+    done
+}
+
+verticalRahmen(){
+    case $1 in 
+        LEVEL1) x=$LEVEL1_POSITION_X;MENU_TYPE=_MENU_LEVEL_1_;;
+        LEVEL2) x=$LEVEL2_POSITION_X;MENU_TYPE=_MENU_LEVEL_2_;;
+        LEVEL3) x=$LEVEL3_POSITION_X;MENU_TYPE=_MENU_LEVEL_3_;;
+        LEVEL4) x=$LEVEL4_POSITION_X;MENU_TYPE=_MENU_LEVEL_4_;;
+    esac
+    for ((i=0; i<$COL_HEIGHT; i++))
+    do
+        cursor_to $(($i+$COL_POSITION_Y)) $x
+        print_option ""
+    done
+}
+
+clearOutput(){
+    local bln="$(printf ' %.0s' {1..136})"
+    for((i=1;i<=8;i++))
+    do
+        cursor_to $(($BOTTOM_PANEL_Y+$i)) $BOTTOM_PANEL_X
+        echo -e "$bln"
+    done
+}
+
+modifyHeight(){
+    local bln="$(printf ' %.0s' {1..136})"
+    local y=$BOTTOM_PANEL_Y  
+    LISTLENGTH=$({ jq '.menu[].submenu[].hosts | length' <<<$CONFIGOBJECT; jq '.menu[].submenu | length' <<<$CONFIGOBJECT; jq '.menu | length' <<<$CONFIGOBJECT; } |sort -nr|head -1)
+    COL_HEIGHT=$(($LISTLENGTH+8))
+    BOTTOM_PANEL_Y=$(($COL_POSITION_Y+$LISTLENGTH+8))
+    cursor_to $y $BOTTOM_PANEL_X
+    echo -e " $bln "
+    bottomPanel
+}
+
+
+deleteItem(){
+    case $1 in 
+        level1) unset ${FIRST_COL[$2]};;
+        level2) unset ${SECOND_COL[$2]};;
+        level3) unset ${SERVERS_MENU[$2]};;
+    esac
+}
+colHeader(){
+    local t1=$(jq -r ".header1" <<<$CONFIGOBJECT)
+    local t2=$(jq -r ".header2" <<<$CONFIGOBJECT)
+    local t3=$(jq -r ".header3" <<<$CONFIGOBJECT)
+    local bln="\e[44m$COL_BLANK_WIDTH\e[0m"
+    local text1="\033[1;37m$t1\033[0m│"
+    cursor_to $HEADERS_Y $HEADERS_X
+    #echo "────────────────────────────────────────"
+    echo -e " │$bln│$bln│$bln│"
+    printf " │\e[44m\033[1;37m %-43s\033[0m\e[0m│\e[44m\033[1;37m %-43s\033[0m\e[0m│\e[44m\033[1;37m %-43s\033[0m\e[0m│\n" "${t1}" "${t2}" "${t3}"
+    echo -e " │$bln│$bln│$bln│"
+    echo -e " │$COL_BLANK_WIDTH│$COL_BLANK_WIDTH│$COL_BLANK_WIDTH│"
+}
+
+mainHeader(){
+    local max=142
+    local blx=$(printf ' %.0s' {1..124})
+    local bln=$(printf ' %.0s' {1..132})
+    local bll=$(printf '─%.0s' {1..134})
+    echo " ┌$bll┐"
+    writeLine "$blx $(underline XGADYOU) "
+    writeLine "$(printf ' %.0s' {1..54})SSH via TKP Version $VERSION$(printf ' %.0s' {1..54})"
+    #writeLine "$bln "  
+    writeLine "$(printf ' %.0s' {1..34})Use up/down keys and enter to confirm. Delete key to remove items  $(printf ' %.0s' {1..32})"
+    writeLine "$bln "
+    echo " │$bln  │"
+
+}
+
+
+
+drawRahmen(){
+    return 0
+    for ((i=0; i<$COL_HEIGHT; i++))
+    do
+        cursor_to $((i+$COL_POSITION_Y)) $LEVEL2_POSITION_X
+        print_option " "
+    done
+    for ((i=0; i<$COL_HEIGHT; i++))
+    do
+        cursor_to $((i+$COL_POSITION_Y)) $LEVEL3_POSITION_X
+        print_option " "
+    done
+}
+# VARAS
+#########################################
+preCheck
+CONFIGFILE=""
+
+while getopts "n:c:vh" opt; do
+  case $opt in
+    c) 
+        CONFIGFILE=$OPTARG
+        [ -f "$CONFIGFILE" ] || { echo "Config file not found: $CONFIGFILE"; exit; } 
+        jq type "$CONFIGFILE" >/dev/null 2>&1 || { echo "Error: $CONFIGFILE is not a valid json "; exit; }
+        CONFIGOBJECT=$(cat $CONFIGFILE)
+    ;;
+    n) 
+        CONFIGFILE=$OPTARG
+        createNewConfig "$CONFIGFILE"
+        exit 0
+    ;;
+    v) echo $VERSION; exit 0;;
+    h) usage;;
+    *) usage;;
+  esac
+done
+main_index=0
+if [ -z "$CONFIGFILE" ]
+then
+    CONFIGOBJECT='{
+	    "header1": "Select an option",
+	    "header2": "Select an option",
+	    "header3": "Select an option", 
+	    "user": "",
+	    "menu": []
+    }'
+    main_index=1
+else
+    [ $(jq '.menu | length' <<<$CONFIGOBJECT) -eq 0 ] && main_index=1 || main_index=0 
+fi
+ME=$(whoami)
+USER=$(tr -d '"' <<< $(jq -r ".user" <<<$CONFIGOBJECT))
+USER="${USER}"
+[ -z "$USER" -o "$USER" = "null" ] && USER=$ME
+COL_WIDTH=44
+COL_BLANK_WIDTH=$(printf ' %.0s' {1..44})
+LEVEL1_POSITION_X=2
+LEVEL2_POSITION_X=48
+LEVEL3_POSITION_X=93
+LEVEL4_POSITION_X=140
+COL_POSITION_Y=11
+LISTLENGTH=$({ jq '.menu[].submenu[].hosts | length' <<<$CONFIGOBJECT; jq '.menu[].submenu | length' <<<$CONFIGOBJECT; jq '.menu | length' <<<$CONFIGOBJECT; } |sort -nr|head -1)
+[ -z "$LISTLENGTH" -o "$LISTLENGTH" = "null" ] && LISTLENGTH=20
+COL_HEIGHT=$(($LISTLENGTH+8))
+BOTTOM_PANEL_Y=$(($COL_POSITION_Y+$LISTLENGTH+8))
+BOTTOM_PANEL_X=0
+HEADERS_Y=$(($COL_POSITION_Y-4))
+HEADERS_X=0
+DOMAINS=("rz.bankenit.de" 
+		 "pka.bankenit.de" 
+		 "pms.bankenit.de" 
+		 "noc.fiducia.de"
+		 "netz.rz.bankenit.de" 
+		 "in.gad.de gadeg.de" 
+		 "brz.fiducia.de")
+
+REFRESH=Y
+SYMBOLS_REGEX="[↳➤☀↺✔✘+⮨←✪✎]"
+MENU_SPACER="⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼"
+MENU_SPACER="────────────────────────────────────────"
+# MAIN PROGRAM
+###############################################
+clear
+# hide terminal cursor
+hideCursor
+# draw top header
+mainHeader
+# draw cols header
+colHeader
+# draw rahmen
+clearColumn LEVEL1
+clearColumn LEVEL2
+clearColumn LEVEL3
+verticalRahmen LEVEL1
+verticalRahmen LEVEL2
+verticalRahmen LEVEL3
+# draw bottom panel
+bottomPanel
+# disable user input
+stty -echo
+
+# loop selection
+while true;
+do
+    # refresh MAIN_MENU    
+    if [ "$REFRESH" = "Y" ]
+    then 
+        #loadColumn LEVEL1
+        FIRST_COL=()
+        IFS=''
+        while read title
+        do
+            FIRST_COL+=("${title}")
+        done < <(jq -r ".menu[]|.title" <<<$CONFIGOBJECT)
+        FIRST_COL+=("$MENU_SPACER")
+        FIRST_COL+=("↳ OTHERS - $(greenfg 'Read from Prompt')")
+        FIRST_COL+=("➤ ADD    - $(greenfg 'Add Item to List')")
+        FIRST_COL+=("✎ Edit   - $(greenfg 'Edit Configfile')")
+        FIRST_COL+=("↺ RELOAD - $(greenfg 'Reload after editing')") 
+        FIRST_COL+=("✔ SAVE   - $(greenfg 'Save this Config')")
+        FIRST_COL+=("✪ HELP   - $(greenfg 'Show Script Help')") 
+        FIRST_COL+=("✘ QUIT   - $(greenfg 'Exit this Script')")
+        REFRESH="N"
+    fi
+    main_index=$(selected_optindex "${FIRST_COL[@]}" _MENU_LEVEL_1_ $main_index)
+    option=$(awk '{print $1}' <<< "${FIRST_COL[$main_index]}")
+    case $option in
+        EDIT|Edit|edit|☀|★|✎)
+          clearOutput
+          BOTTOM_POSITION=$(($BOTTOM_PANEL_Y+2))
+          cursor_to $((BOTTOM_POSITION++)) 1
+          echo "  $(greenfg ➤) Opening $CONFIGFILE ..." 
+          /bin/MobaTextEditor $CONFIGFILE >/dev/null  
+        ;;
+        RELOAD|Reload|reload|⇅|↻|↺)
+          #$0 $@ && exit 
+          CONFIGOBJECT=$(cat $CONFIGFILE)
+          REFRESH="Y"
+        ;;
+        ADD|+|➤)
+            clearOutput
+            BOTTOM_POSITION=$(($BOTTOM_PANEL_Y+2))
+            cursor_to $((BOTTOM_POSITION++)) 1
+            showCursor
+            stty echo
+            read -ep "  $(greenfg ➤) Title: " TITLE
+            [ "${TITLE}" = "" ] && {
+				#echo
+                hideCursor
+                clearOutput
+				stty -echo
+                continue
+			}
+            hideCursor
+            TITLE=$(echo "${TITLE}"|sed 's/ *, */,/g')
+            IFS=',' read -r -a array <<< "$TITLE"
+            for ((i=0;i<${#array[@]};i++))
+            do
+                CONFIGOBJECT=$(jq ".menu += [{"title": \"${array[$i]}\", "submenu": []}]" <<<$CONFIGOBJECT)
+            done 
+            main_index=$(($main_index+${#array[@]}))
+            REFRESH="Y"
+            clearOutput
+            modifyHeight
+            verticalRahmen LEVEL1
+            verticalRahmen LEVEL2 
+            verticalRahmen LEVEL3
+
+            stty -echo
+        ;;
+        SAVE|✔)
+            clearOutput
+            BOTTOM_POSITION=$(($BOTTOM_PANEL_Y+2))
+            cursor_to $((BOTTOM_POSITION++)) 1
+            if [ -z "$CONFIGFILE" ]
+            then 
+                 jq . <<<$CONFIGOBJECT > /tmp/tkp.json
+                 echo -e "   $(greenfg ✔) Configfile: /tmp/tkp.json successfully saved"
+            else
+                 jq . <<<$CONFIGOBJECT > $CONFIGFILE
+                 echo -e "   $(greenfg ✔) Configfile: $CONFIGFILE successfully saved"
+            fi
+        ;;
+        
+        OTHERS|❏|☐|↳)
+            clearOutput
+            showCursor
+            BOTTOM_POSITION=$(($BOTTOM_PANEL_Y+2))
+			RESOLVED_DOMAINS="rz.bankenit.de pka.bankenit.de pms.bankenit.de noc.fiducia.de netz.rz.bankenit.de in.gad.de gadeg.de brz.fiducia.de"
+            STG="none"
+            cursor_to $((BOTTOM_POSITION++)) 1 
+            stty echo
+            read -ep "  $(greenfg ➤) Hostname: " HOST
+            [ "${HOST}" = "" ] && {
+				#echo
+                hideCursor
+                clearOutput
+                stty -echo
+				continue
+			}
+            cursor_to $((BOTTOM_POSITION++)) 1
+            read -ep "  $(greenfg ➤) sudo User: " SUDOUSER
+            [ "${SUDOUSER//[[:space:]]/}" = "" ] && SUDOUSER=$USER 
+
+            cursor_to $((BOTTOM_POSITION++)) 1
+	        read -ep "  $(greenfg ➤) Location [ms|ka] ms is default: " LOCATION
+            [ "${LOCATION}" = "" ] && LOCATION=ms
+	        [ "${HOST:2:1}" = "p" -o "${HOST:2:1}" = "P" ] && STG=prod
+            [ "${HOST:2:1}" = "i" -o "${HOST:2:1}" = "I" ] && STG=nonprod
+            cursor_to $((BOTTOM_POSITION++)) 1 
+            [ "${STG}" = "none" ] && read -ep "  $(greenfg ➤) Stage [prod|nonprod] prod is default: " STG
+            hideCursor
+            [ "${STG}" = "" ] && STG=prod
+            DOMAIN=$(nslookup "${HOST}"|grep "${HOST}\."|sed 's/^.*'$HOST'\.//')
+			[ -z "${DOMAIN}" ] && {
+                    cursor_to $((BOTTOM_POSITION++)) 1
+					echo "  $(redfg ✘) Server Domain nicht bekannt"
+                    cursor_to $((BOTTOM_POSITION++)) 1
+                    showCursor
+					read -ep "  $(greenfg ➤) Domain: [example: in.gad.de] " DOMAIN
+                    hideCursor
+			}
+            stty -echo
+	        myssh $HOST $STG $LOCATION $DOMAIN $SUDOUSER
+        ;;
+        quit|QUIT|exit|EXIT|✘) 
+            cleanAll
+        ;;
+
+        HELP|✪)
+            /bin/cygstart.exe https://ccm.in.fiduciagad.de/confluence/display/PLSWUSSLX/TKP+Skript+von+xgadyou
+            continue
+        ;;
+        *) 
+            [ $main_index -ge 200 ] && {
+                 main_index=$(($main_index-200))
+                 continue
+            }
+            if [ $main_index -ge 100 ]
+            then 
+                 #delete
+                 main_index=$(($main_index-100))
+                 CONFIGOBJECT=$(jq "del(.menu[$main_index])" <<<$CONFIGOBJECT)
+                 REFRESH=Y
+                 COUNTSUBS=$(jq ".menu|length" <<<$CONFIGOBJECT)
+                 
+                 if [ $COUNTSUBS -eq 0 ] 
+                 then 
+                     main_index=$(($main_index+1))
+                 elif [ $COUNTSUBS -eq 1 ]
+                 then
+                     main_index=0
+                 else
+                     [ $main_index -eq 0 ] || main_index=$(($main_index-1))
+                 fi
+                 continue
+            fi
+            
+            [ -z "$option" ] && continue
+
+            if [ $(jq ".menu[$main_index].submenu|length" <<<$CONFIGOBJECT) -eq 0 ]
+            then  
+                index_reminder=1
+            else
+                index_reminder=0
+            fi
+            REFRESH=Y
+            while true;
+            do  
+                if [ "$REFRESH" = "Y" ]
+                then 
+                    #loadColumn LEVEL2
+                    SECOND_COL=()
+                    IFS=''
+                    while read title
+                    do
+                        SECOND_COL+=("${title}")
+                    done < <(jq -r ".menu[$main_index].submenu[]|.title" <<<$CONFIGOBJECT)
+                    SECOND_COL+=("$MENU_SPACER")
+                    SECOND_COL+=("➤ ADD    - $(greenfg 'Add Item to List')")
+                    SECOND_COL+=("⮨ BACK   - $(greenfg 'Go back')")
+                        
+                    REFRESH=N
+                fi
+                sub_index=$(selected_optindex "${SECOND_COL[@]}" _MENU_LEVEL_2_ $index_reminder)
+                index_reminder=$sub_index
+                soption=$(awk '{print $1}' <<< "${SECOND_COL[$sub_index]}")
+                
+                [ $index_reminder -ge 200 ] && {
+                    index_reminder=$(($index_reminder-200))
+                    continue
+                }
+                if [ $index_reminder -ge 100 ]
+                then 
+                     #delete
+                     index_reminder=$(($index_reminder-100))
+                     CONFIGOBJECT=$(jq "del(.menu[$main_index].submenu[$index_reminder])" <<<$CONFIGOBJECT)
+                     REFRESH=Y
+                     COUNTSUBS=$(jq ".menu[$main_index].submenu|length" <<<$CONFIGOBJECT)
+                     
+                     if [ $COUNTSUBS -eq 0 ] 
+                     then 
+                         index_reminder=$(($index_reminder+1))
+                     elif [ $COUNTSUBS -eq 1 ]
+                     then
+                         index_reminder=0
+                     else
+                         [ $index_reminder -eq 0 ] || index_reminder=$(($index_reminder-1))
+                     fi
+                     continue
+                fi                      
+                case $soption in
+                    ADD|+|➤|+)
+                        clearOutput
+                        BOTTOM_POSITION=$(($BOTTOM_PANEL_Y+2))
+                        cursor_to $((BOTTOM_POSITION++)) 1
+                        showCursor
+                        stty echo
+                        read -ep "  $(greenfg ➤) Title: " TITLE
+                        [ "${TITLE}" = "" ] && {
+                            hideCursor
+                            clearOutput
+                            stty -echo
+		            		continue
+		            	}
+                        hideCursor
+                        TITLE=$(echo "${TITLE}"|sed 's/ *, */,/g')
+                        IFS=',' read -r -a array <<< "$TITLE"
+                        for ((i=0;i<${#array[@]};i++))
+                        do
+                            CONFIGOBJECT=$(jq ".menu[$main_index].submenu += [{"title": \"${array[$i]}\", "hosts": []}]" <<<$CONFIGOBJECT)
+                        done
+                        clearOutput
+                        modifyHeight
+                        REFRESH=Y
+                        index_reminder=$(($index_reminder+${#array[@]}))
+                        stty -echo
+                        
+                        # calc menu lenght and add |
+                        verticalRahmen LEVEL2 
+                        verticalRahmen LEVEL3
+                        continue;
+                    ;; 
+                    ⮨|←|back|BACK) clearColumn LEVEL2; verticalRahmen LEVEL2; break;;
+                esac
+                if [ $(jq ".menu[$main_index].submenu[$sub_index].hosts|length" <<<$CONFIGOBJECT) -eq 0 ]
+                then  
+                    server_index=1
+                else
+                    server_index=0
+                fi
+                HOSTREFRESH=Y
+                while true;
+                do
+                    if [ "$HOSTREFRESH" = "Y" ]
+                    then
+                        SERVERS_MENU=()
+                        IFS=' '
+                        while read host sudouser
+                        do
+                            [ "$sudouser" = "null" -o "$sudouser" = "" ] && sudouser=$USER
+                            SERVERS_MENU+=("${host} ($sudouser)")
+                        done < <(jq -r '.menu['$main_index'].submenu['$sub_index'].hosts[]|"\(.name) \(.user)"' <<<$CONFIGOBJECT)
+                        SERVERS_MENU+=("$MENU_SPACER")
+                        SERVERS_MENU+=("➤ ADD    - $(greenfg 'Add Host')")
+                        SERVERS_MENU+=("⮨ BACK   - $(greenfg 'Go back')")
+                        HOSTREFRESH=N
+                        IFS=''
+                    fi
+                    server_index=$(selected_optindex "${SERVERS_MENU[@]}" _MENU_LEVEL_3_ $server_index)
+                    option=$(awk '{print $1}' <<< "${SERVERS_MENU[$server_index]}")
+                    case $option in
+                        ADD|add|+|➤|+)
+                            clearOutput
+                            BOTTOM_POSITION=$(($BOTTOM_PANEL_Y+2))
+                            cursor_to $((BOTTOM_POSITION++)) 1
+                            showCursor
+                            stty echo
+                            read -ep "  $(greenfg ➤) Name [hostname]: " name
+                            [ "${name}" = "" ] && {
+                                hideCursor
+                                clearOutput
+                                stty -echo
+		                		continue
+		                	}
+                            read -ep "  $(greenfg ➤) Location [ms(default)|ka]: " location
+                            [ -z "${location}" ] && location=ms 
+                            read -ep "  $(greenfg ➤) Stage [prod(default)|nonprod]: " stage
+                            [ -z "${stage}" ] && stage=prod
+                            KNOWNDOMAINS=""
+                            for ((i=0; i<${#DOMAINS[@]}; i++)); do KNOWNDOMAINS+="${DOMAINS[$i]} "; done
+                            echo -e  "  $(greenfg ➤) Known Domains: $KNOWNDOMAINS"
+                            read -ep "  $(greenfg ➤) Domain [empty for known domain]: " domain
+                            read -ep "  $(greenfg ➤) sudo user [empty]: " sudouser
+                            [ "${sudouser//[[:space:]]/}" = "" ] && sudouser=$USER
+
+                            hideCursor
+                            name=$(echo "${name}"|sed 's/ *, */,/g')
+                            IFS=',' read -r -a array <<< "$name"
+                            for ((i=0;i<${#array[@]};i++))
+                            do
+                                CONFIGOBJECT=$(jq ".menu[$main_index].submenu[$sub_index].hosts += [{"name": \"${array[$i]}\", "location": \"$location\", "stage": \"$stage\", "domain": \"$domain\", "user": \"$sudouser\"}]" <<<$CONFIGOBJECT)
+                            done
+                            clearOutput
+                            modifyHeight
+                            HOSTREFRESH=Y
+                            server_index=$(($server_index+${#array[@]}))
+                            # verticalRahmen LEVEL1;
+                            #verticalRahmen LEVEL2; 
+                            verticalRahmen LEVEL3
+                            stty -echo
+                        ;; 
+                        ⮨|←|back|BACK)  clearColumn LEVEL3;verticalRahmen LEVEL3; break;;
+                        *)
+                            [ $server_index -ge 200 ] && {
+                                server_index=$(($server_index-200))
+                                continue
+                            }
+                            if [ $server_index -ge 100 ]
+                            then 
+                                #delete
+                                server_index=$(($server_index-100))
+                                CONFIGOBJECT=$(jq "del(.menu[$main_index].submenu[$sub_index].hosts[$server_index])" <<<$CONFIGOBJECT)
+                                HOSTREFRESH=Y
+                                COUNTHOSTS=$(jq ".menu[$main_index].submenu[$sub_index].hosts|length" <<<$CONFIGOBJECT)
+                                if [ $COUNTHOSTS -eq 0 ] 
+                                then 
+                                    server_index=$(($server_index+1))
+                                elif [ $COUNTHOSTS -eq 1 ]
+                                then
+                                    server_index=0
+                                else
+                                    [ $server_index -eq 0 ] || server_index=$(($server_index-1))
+                                fi
+                            else
+                                #ssh 
+                                cursor_to $((BOTTOM_POSITION++)) 1
+                                STAGE=$(jq -r ".menu[$main_index].submenu[$sub_index].hosts[$server_index].stage" <<<$CONFIGOBJECT)
+                                LOCATION=$(jq -r ".menu[$main_index].submenu[$sub_index].hosts[$server_index].location" <<<$CONFIGOBJECT)
+                                DOMAIN=$(jq -r ".menu[$main_index].submenu[$sub_index].hosts[$server_index].domain" <<<$CONFIGOBJECT)
+                                SUDOUSER=$(jq -r ".menu[$main_index].submenu[$sub_index].hosts[$server_index].user" <<<$CONFIGOBJECT) 
+                                [ "${STAGE//[[:space:]]/}" = "" ] && STAGE=prod
+                                [ "${LOCATION//[[:space:]]/}" = "" ] && LOCATION=ka
+                                [ "${SUDOUSER//[[:space:]]/}" = "" ] && SUDOUSER=$ME
+                                myssh $option "${STAGE}" "${LOCATION}" "${DOMAIN}" "${SUDOUSER}"
+                            fi
+                        ;;
+                    esac
+                done
+            done
+        ;;
+    esac 
+done
